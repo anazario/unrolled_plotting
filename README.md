@@ -29,7 +29,7 @@ This framework transforms 2D histograms into 1D "unrolled" plots by mapping 2D b
 
 ### Setup
 ```bash
-git clone <your-repository>
+git clone unrolled_plotting
 cd unrolled_plotting
 ```
 
