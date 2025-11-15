@@ -52,7 +52,7 @@ class UnrolledDataProcessor:
         self.rs_bins = [0.15, 0.3, 0.4, float('inf')]
         
         # Define bracket-style labels with "inf" for infinity
-        self.ms_bracket_labels = ["[1000,2000]", "[2000,3000]", "[3000,inf]"]
+        self.ms_bracket_labels = ["[1.0,2.0]", "[2.0,3.0]", "[3.0,inf]"]
         self.rs_bracket_labels = ["[0.15,0.3]", "[0.3,0.4]", "[0.4,inf]"]
         
         # Define group labels using #in notation with "inf"

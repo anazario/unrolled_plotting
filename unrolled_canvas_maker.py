@@ -41,7 +41,7 @@ class UnrolledCanvasMaker:
         
         # Group label configuration
         self.label_config = {
-            'group_label_size': 0.03,
+            'group_label_size': 0.035,
             'group_label_y_position': 0.87,  # Near top of canvas
             'separator_line_width': 2,
             'separator_line_color': ROOT.kBlack
@@ -82,6 +82,85 @@ class UnrolledCanvasMaker:
         
         # Fallback to cleaned label if no mapping found
         return clean_label.strip('_')
+    
+    def _format_sv_label(self, final_state: str) -> str:
+        """
+        Format final state labels according to SV convention: {N}SV_{flavor}^{selection}
+        
+        Convention:
+        - N: total count of SVs (only shown for 2 or more, just shows "2")
+        - flavor: 'hh' (hadronic) or 'll' (leptonic)
+        - selection: CRL, SRL, CRT, SRT
+        - mixed case: SV_{ll}SV_{hh}^{selection}
+        
+        Examples:
+        - passNHad1SelectionSRLoose -> SV_{hh}^{SRL} (single hadronic, signal region loose)
+        - passNLep1SelectionSRTight -> SV_{ll}^{SRT} (single leptonic, signal region tight)
+        - passNHad2SelectionCRLoose -> 2SV_{hh}^{CRL} (two hadronic, control region loose)
+        - passNLepNHadSelectionSRTight -> SV_{ll}SV_{hh}^{SRT} (mixed)
+        """
+        import re
+        
+        # Default values
+        count = ""
+        flavor = "had"  # default to hadronic
+        selection = "SRT"  # default to signal region tight
+        
+        # Parse the branch name pattern: passN{Had|Lep}{count}Selection{SR|CR}{Loose|Tight}
+        
+        # Extract flavor and count
+        if "HadAndLep" in final_state or "LepAndHad" in final_state:
+            # Mixed case - still need to extract selection
+            if "CR" in final_state:
+                if "Loose" in final_state:
+                    selection = "CRL"
+                else:
+                    selection = "CRT"
+            elif "SR" in final_state:
+                if "Loose" in final_state:
+                    selection = "SRL"
+                else:
+                    selection = "SRT"
+            return f"SV_{{lep}}SV_{{had}}^{{{selection}}}"
+        elif "NHad" in final_state:
+            flavor = "had"  # hadronic
+            # Check for Ge2 (2 or more) pattern
+            if "HadGe2" in final_state:
+                count = "2"
+            else:
+                # Extract count after NHad
+                had_match = re.search(r'NHad(\d+)', final_state)
+                if had_match:
+                    sv_count = int(had_match.group(1))
+                    if sv_count >= 2:
+                        count = "2"
+        elif "NLep" in final_state:
+            flavor = "lep"  # leptonic
+            # Check for Ge2 (2 or more) pattern  
+            if "LepGe2" in final_state:
+                count = "2"
+            else:
+                # Extract count after NLep
+                lep_match = re.search(r'NLep(\d+)', final_state)
+                if lep_match:
+                    sv_count = int(lep_match.group(1))
+                    if sv_count >= 2:
+                        count = "2"
+        
+        # Extract selection region
+        if "CR" in final_state:
+            if "Loose" in final_state:
+                selection = "CRL"
+            else:
+                selection = "CRT"
+        elif "SR" in final_state:
+            if "Loose" in final_state:
+                selection = "SRL"
+            else:
+                selection = "SRT"
+        
+        # Format final label
+        return f"{count}SV_{{{flavor}}}^{{{selection}}}"
 
     #def _get_final_state_label(self, label: str) -> str:
 
@@ -758,7 +837,8 @@ class UnrolledCanvasMaker:
         return canvas
     
     def create_datamc_ratio_canvas(self, data_hist: ROOT.TH1D, mc_histograms: List[Tuple], 
-                                  group_labels: List[str], name: str, normalize: bool = False) -> ROOT.TCanvas:
+                                  group_labels: List[str], name: str, normalize: bool = False, 
+                                  final_state: str = None) -> ROOT.TCanvas:
         """
         Create a two-pad canvas with stacked MC backgrounds and data/MC ratio.
         
@@ -768,6 +848,7 @@ class UnrolledCanvasMaker:
             group_labels: Group labels for the plot
             name: Canvas name
             normalize: Whether to normalize histograms
+            final_state: Final state name for SV label (optional)
             
         Returns:
             Canvas with two pads and Data/MC comparison
@@ -787,8 +868,8 @@ class UnrolledCanvasMaker:
                             self.canvas_config['height'] + 100)
         
         # Create two pads: top for distribution, bottom for ratio
-        pad1 = ROOT.TPad("pad1", "Distribution", 0, 0.3, 0.85, 1.0)  # 85% width for plot area
-        pad2 = ROOT.TPad("pad2", "Ratio", 0, 0.0, 0.85, 0.3)         # 85% width for ratio
+        pad1 = ROOT.TPad("pad1", "Distribution", 0, 0.3, 0.8, 1.0)  # 85% width for plot area
+        pad2 = ROOT.TPad("pad2", "Ratio", 0, 0.0, 0.8, 0.3)         # 85% width for ratio
         
         # Set margins for main plotting area
         pad1.SetLeftMargin(0.15)
@@ -844,13 +925,46 @@ class UnrolledCanvasMaker:
         stack = ROOT.THStack("stack", "")
         total_mc = None
         
-        # Style MC histograms and add to stack in sorted order
+        # First pass: create total MC sum before normalization
         for stack_idx, (integral, mc_hist, label, orig_idx) in enumerate(mc_with_integrals):
-            # Normalize if requested
+            if total_mc is None:
+                total_mc = mc_hist.Clone("total_mc")
+            else:
+                total_mc.Add(mc_hist)
+        
+        # Apply normalization to total MC if requested
+        if normalize:
+            from unrolled_histogram_maker import UnrolledHistogramMaker
+            hist_maker = UnrolledHistogramMaker()
+            total_mc_normalized = hist_maker.normalize_histogram(total_mc, 'unity')
+            
+            # Calculate normalization factors for each group
+            normalization_factors = []
+            for group in range(3):  # 3 groups of 3 bins each
+                group_sum_original = 0
+                group_sum_normalized = 0
+                for bin_idx in range(group * 3 + 1, (group + 1) * 3 + 1):
+                    group_sum_original += total_mc.GetBinContent(bin_idx)
+                    group_sum_normalized += total_mc_normalized.GetBinContent(bin_idx)
+                
+                if group_sum_original > 0:
+                    normalization_factors.append(group_sum_normalized / group_sum_original)
+                else:
+                    normalization_factors.append(1.0)
+            
+            total_mc = total_mc_normalized
+        
+        # Second pass: style MC histograms and apply same normalization
+        for stack_idx, (integral, mc_hist, label, orig_idx) in enumerate(mc_with_integrals):
+            # Apply same normalization as total MC
             if normalize:
-                from unrolled_histogram_maker import UnrolledHistogramMaker
-                hist_maker = UnrolledHistogramMaker()
-                mc_hist = hist_maker.normalize_histogram(mc_hist, 'unity')
+                for group in range(3):
+                    factor = normalization_factors[group]
+                    for bin_idx in range(group * 3 + 1, (group + 1) * 3 + 1):
+                        old_content = mc_hist.GetBinContent(bin_idx)
+                        old_error = mc_hist.GetBinError(bin_idx)
+                        mc_hist.SetBinContent(bin_idx, old_content * factor)
+                        mc_hist.SetBinError(bin_idx, old_error * factor)
             
             color = mc_colors[orig_idx % len(mc_colors)]
             print(f"Adding to stack: {label} (yield: {integral:.1f}, color: {color})")
@@ -860,25 +974,31 @@ class UnrolledCanvasMaker:
             mc_hist.SetLineStyle(1)
             mc_hist.SetFillStyle(1001)
             stack.Add(mc_hist)
-            
-            # Create total MC for ratio
-            if total_mc is None:
-                total_mc = mc_hist.Clone("total_mc")
-            else:
-                total_mc.Add(mc_hist)
         
         # Set axis ranges
-        max_val = max(data_hist.GetMaximum(), stack.GetMaximum()) * 2.0
-        stack.SetMinimum(0.5)  # For log scale
-        stack.SetMaximum(max_val * 1.5)
+        if normalize:
+            # For normalized plots, max is 1.0 by definition, use log scale
+            stack.SetMinimum(0.001)  # Small value for log scale to handle zeros
+            stack.SetMaximum(15.)     # 1.0 + 50% headroom
+        else:
+            # For non-normalized plots, calculate from actual data
+            max_val = max(data_hist.GetMaximum(), stack.GetMaximum())
+            stack.SetMinimum(0.5)  # For log scale
+            stack.SetMaximum(max_val * 1.5)
         
         # Draw axis and grid first, then histogram without redrawing axis
         stack.Draw("AXIS")  # Draw only the axis frame and tick marks
         stack.GetXaxis().SetLabelSize(0)  # Hide x-labels on top pad
-        stack.GetYaxis().SetTitle("Events")
+        
+        # Set appropriate y-axis title based on normalization
+        if normalize:
+            stack.GetYaxis().SetTitle("normalized events")
+        else:
+            stack.GetYaxis().SetTitle("number of events")
+            
         stack.GetYaxis().CenterTitle()
-        stack.GetYaxis().SetTitleSize(0.05)
-        stack.GetYaxis().SetLabelSize(0.04)
+        stack.GetYaxis().SetTitleSize(0.06)
+        stack.GetYaxis().SetLabelSize(0.05)
         pad1.Update()  # Force update to establish axis
         pad1.RedrawAxis("G")  # Draw grid lines behind everything
         stack.Draw("HIST SAME")  # Draw histogram content without redrawing axis
@@ -888,7 +1008,8 @@ class UnrolledCanvasMaker:
         mc_uncertainty.SetFillStyle(3244)  # Hatched pattern
         mc_uncertainty.SetFillColor(ROOT.kBlack)
         mc_uncertainty.SetLineColor(ROOT.kBlack)
-        mc_uncertainty.SetLineWidth(1)# Box border for legend
+        mc_uncertainty.SetLineWidth(1)  # Box border for legend
+        mc_uncertainty.SetLineStyle(1)  # Solid line for legend border
         mc_uncertainty.Draw("E2 SAME")  # E2 = error band
         
         # Style data histogram
@@ -914,14 +1035,14 @@ class UnrolledCanvasMaker:
         ratio_hist.SetLineStyle(1)
         
         # Set axis properties for ratio
-        ratio_hist.GetXaxis().SetTitle("R_{S}" if "ms" in name.lower() else "M_{S} [GeV]")
-        ratio_hist.GetYaxis().SetTitle("#frac{Data}{MC}")
+        ratio_hist.GetXaxis().SetTitle("R_{S}" if "ms" in name.lower() else "M_{S} [TeV]")
+        ratio_hist.GetYaxis().SetTitle("#frac{data}{model}")
         ratio_hist.GetYaxis().SetRangeUser(0.5, 1.5)
-        ratio_hist.GetXaxis().SetTitleSize(0.12)
-        ratio_hist.GetYaxis().SetTitleSize(0.12)
-        ratio_hist.GetXaxis().SetLabelSize(0.12)
+        ratio_hist.GetXaxis().SetTitleSize(0.15)
+        ratio_hist.GetYaxis().SetTitleSize(0.15)
+        ratio_hist.GetXaxis().SetLabelSize(0.18)
         ratio_hist.GetXaxis().SetLabelOffset(0.02)
-        ratio_hist.GetYaxis().SetLabelSize(0.08)
+        ratio_hist.GetYaxis().SetLabelSize(0.12)
         ratio_hist.GetYaxis().SetTitleOffset(0.37)
         ratio_hist.GetXaxis().SetTitleOffset(1.25)
         ratio_hist.GetYaxis().SetNdivisions(505)
@@ -947,18 +1068,18 @@ class UnrolledCanvasMaker:
         canvas.cd()
         
         # Legend positioned in the right margin
-        legend = ROOT.TLegend(0.85, 0.7, 1.05, 0.95)
+        legend = ROOT.TLegend(0.8, 0.6, 1.05, 0.95)
         legend.SetBorderSize(0)
         legend.SetFillStyle(0)
-        legend.SetTextSize(0.03)
+        legend.SetTextSize(0.035)
         legend.SetMargin(0.15)
         #legend.SetEntrySeparation(1.)
         
         # Add data entry
-        legend.AddEntry(data_hist, "Data", "pey0")
+        legend.AddEntry(data_hist, "data", "pey0")
         
         # Add MC uncertainty band
-        legend.AddEntry(mc_uncertainty, "Total Uncertainty", "f")
+        legend.AddEntry(mc_uncertainty, "total uncertainty", "f")
         
         # Add MC backgrounds (reverse stack order for legend - highest yield first)
         for integral, mc_hist, label, orig_idx in reversed(mc_with_integrals):
@@ -987,7 +1108,7 @@ class UnrolledCanvasMaker:
         self._add_group_labels_datamc(overlay, group_labels, pad1)
         
         # Add CMS labels
-        self._add_cms_labels_datamc(overlay)
+        self._add_cms_labels_datamc(overlay, final_state)
         
         # Store objects to prevent garbage collection
         canvas.pad1 = pad1
@@ -1012,7 +1133,7 @@ class UnrolledCanvasMaker:
         # For full canvas overlay, we need to map to the top pad area
         # Top pad is at (0, 0.3, 0.75, 1.0) in canvas coordinates
         pad_canvas_left = 0.0
-        pad_canvas_right = 0.85  # 85% of canvas width
+        pad_canvas_right = 0.8  # 85% of canvas width
         pad_canvas_width = pad_canvas_right - pad_canvas_left
         
         # Account for margins within the top pad
@@ -1029,7 +1150,7 @@ class UnrolledCanvasMaker:
         
         latex = ROOT.TLatex()
         latex.SetTextAlign(22)
-        latex.SetTextSize(0.03)
+        latex.SetTextSize(0.035)
         latex.SetTextFont(42)
         latex.SetNDC(True)
         
@@ -1046,7 +1167,7 @@ class UnrolledCanvasMaker:
         # For full canvas overlay, map to the plotting area
         # Top pad is at (0, 0.3, 0.75, 1.0) in canvas coordinates
         pad_canvas_left = 0.0
-        pad_canvas_right = 0.85  # 85% of canvas width
+        pad_canvas_right = 0.8  # 85% of canvas width
         pad_canvas_width = pad_canvas_right - pad_canvas_left
         
         # Account for margins within the top pad
@@ -1084,25 +1205,38 @@ class UnrolledCanvasMaker:
         
         return lines
     
-    def _add_cms_labels_datamc(self, overlay_pad: ROOT.TPad) -> None:
+    def _add_cms_labels_datamc(self, overlay_pad: ROOT.TPad, final_state: str = None) -> None:
         """Add CMS labels for data/MC canvas."""
+
+        y_pos = 0.958
+        
         # CMS preliminary
         latex = ROOT.TLatex()
         latex.SetNDC()
         latex.SetTextAlign(11)
-        latex.SetTextSize(0.04)
+        latex.SetTextSize(0.052)
 
-        latex.SetTextFont(62)
-        latex.DrawLatex(0.13, 0.95, "CMS")
+        latex.SetTextFont(61)
+        latex.DrawLatex(0.12, y_pos, "CMS")
+
         latex.SetTextFont(52)
+        latex.SetTextSize(0.04)
+        latex.DrawLatex(0.18, y_pos, "Preliminary")
 
-        latex.SetTextSize(0.03)
-        latex.DrawLatex(0.175, 0.95, "Preliminary")
-
-        # Luminosity
+        # SV label and luminosity
         latex.SetTextFont(42)
         latex.SetTextAlign(31)
-        latex.DrawLatex(0.82, 0.95, f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)")
+        lumi_text = f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)"
+        
+        # Add SV label before luminosity if final state is provided
+        if final_state:
+            sv_label = self._format_sv_label(final_state)
+            latex.DrawLatex(0.63, y_pos, sv_label)
+            #latex.DrawLatex(0.415, y_pos, lumi_text)
+        #else:
+        #latex.DrawLatex(0.785, y_pos, lumi_text)
+
+        latex.DrawLatex(0.785, y_pos, lumi_text) 
         
     def set_canvas_config(self, **kwargs) -> None:
         """

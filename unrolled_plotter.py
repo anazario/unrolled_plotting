@@ -317,8 +317,8 @@ class UnrolledPlotter:
                 if labels and i < len(labels):
                     plot_labels.append(labels[i])
                 else:
-                    # Convert to physics notation: N_{Had/Lep}^{SR/CR, Loose/Tight}=1/#ge2
-                    clean_label = self._convert_to_physics_notation(final_state)
+                    # Convert to SV notation: {N}SV_{flavor}^{selection}
+                    clean_label = self.canvas_maker._format_sv_label(final_state)
                     plot_labels.append(clean_label)
             
             # Step 3: Create comparison canvas
@@ -599,8 +599,8 @@ class UnrolledPlotter:
                 if labels and i < len(labels):
                     plot_labels.append(labels[i])
                 else:
-                    # Convert to physics notation: N_{Had/Lep}^{SR/CR, Loose/Tight}=1/#ge2
-                    clean_label = self._convert_to_physics_notation(final_state)
+                    # Convert to SV notation: {N}SV_{flavor}^{selection}
+                    clean_label = self.canvas_maker._format_sv_label(final_state)
                     plot_labels.append(clean_label)
             
             # Step 3: Create comparison canvas with markers
@@ -903,7 +903,7 @@ class UnrolledPlotter:
             # Create Data/MC ratio canvas
             group_labels = self.data_processor.get_group_labels(self.grouping_type)
             canvas = self.canvas_maker.create_datamc_ratio_canvas(
-                data_hist, mc_histograms, group_labels, name, normalize
+                data_hist, mc_histograms, group_labels, name, normalize, final_state
             )
             
             # Save if output path provided
@@ -1058,7 +1058,7 @@ class UnrolledPlotter:
             # Create Data/MC ratio canvas
             group_labels = self.data_processor.get_group_labels(self.grouping_type)
             canvas = self.canvas_maker.create_datamc_ratio_canvas(
-                data_hist, mc_histograms, group_labels, name, normalize
+                data_hist, mc_histograms, group_labels, name, normalize, final_state
             )
             
             return {
