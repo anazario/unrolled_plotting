@@ -89,14 +89,18 @@ class UnrolledHistogramMaker:
             hist.GetXaxis().SetBinLabel(i + 1, bin_labels[i])
         
         # Set axis properties with centered titles and increased spacing
-        x_axis_title = "R_{S}" if grouping_type == 'ms' else "M_{S}"
+        x_axis_title = "R_{S}" if grouping_type == 'ms' else "M_{S} [TeV]"
         hist.GetXaxis().SetTitle(x_axis_title)
-        hist.GetXaxis().CenterTitle(True)  # Center x-axis title
-        hist.GetXaxis().SetTitleOffset(1.5)  # Increase offset for x-axis title
-        hist.GetXaxis().SetLabelSize(0.04)  # Increase bin label size
-        hist.GetYaxis().SetTitle("Yield")
-        hist.GetYaxis().CenterTitle(True)  # Center y-axis title
-        hist.SetStats(0)  # No statistics box
+        hist.GetXaxis().CenterTitle(True)  
+        hist.GetXaxis().SetTitleOffset(1.3)
+        hist.GetXaxis().SetLabelSize(0.055)
+        hist.GetXaxis().SetTitleSize(0.045)
+        hist.GetYaxis().SetTitle("number of events")
+        hist.GetYaxis().CenterTitle(True)
+        hist.GetYaxis().SetTitleSize(0.045)
+        hist.GetYaxis().SetLabelSize(0.04)
+        
+        hist.SetStats(0)  
         
         return hist
     
@@ -301,7 +305,7 @@ class UnrolledHistogramMaker:
         
         # Update y-axis title
         if normalization == 'unity':
-            normalized.GetYaxis().SetTitle("Normalized Yield")
+            normalized.GetYaxis().SetTitle("normalized events")
         elif normalization == 'bin_width':
             normalized.GetYaxis().SetTitle("Yield / Bin Width")
         elif normalization == 'maximum':

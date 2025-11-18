@@ -1295,72 +1295,6 @@ class UnrolledPlotter:
         print("ANALYSIS COMPLETE!")
         print("="*80)
     
-    def _convert_to_physics_notation(self, final_state_flag: str) -> str:
-        """
-        Convert final state flag to physics notation: N_{Had/Lep}^{SR/CR, Loose/Tight}=1/#ge2
-        
-        Args:
-            final_state_flag: e.g., 'passNHad1SelectionSRLoose'
-            
-        Returns:
-            Physics notation string, e.g., 'N_{Had}^{SR, Loose}=1'
-        """
-        # Remove 'pass' and 'Selection' prefix/suffix
-        name = final_state_flag.replace('pass', '').replace('Selection', '')
-        
-        # Parse the components
-        # Format: N + Had/Lep + 1/Ge2 + SR/CR + Loose/Tight
-        
-        # Initialize defaults
-        multiplicity = '?'
-        operator = '='
-        
-        # Extract particle type and handle special case
-        if 'Ge1HadAndLep' in name:
-            particle = 'Had+Lep'
-            name = name.replace('Ge1HadAndLep', '')
-            multiplicity = '1'
-            operator = '#geq'
-        elif 'NHad' in name:
-            particle = 'Had'
-            name = name.replace('NHad', '')
-        elif 'NLep' in name:
-            particle = 'Lep' 
-            name = name.replace('NLep', '')
-        else:
-            return final_state_flag  # Fallback
-        
-        # Extract multiplicity (unless already set for special cases)
-        if multiplicity == '?' and operator == '=':
-            if name.startswith('1'):
-                multiplicity = '1'
-                operator = '='
-                name = name[1:]
-            elif name.startswith('Ge2'):
-                multiplicity = '2'
-                operator = '#geq'
-                name = name[3:]
-        
-        # Extract region (SR/CR)
-        if 'SR' in name:
-            region = 'SR'
-            name = name.replace('SR', '')
-        elif 'CR' in name:
-            region = 'CR'
-            name = name.replace('CR', '')
-        else:
-            region = '?'
-        
-        # Extract tightness
-        if 'Loose' in name:
-            tightness = 'Loose'
-        elif 'Tight' in name:
-            tightness = 'Tight'
-        else:
-            tightness = '?'
-        
-        # Construct physics notation
-        return f"N_{{{particle}}}^{{{region}, {tightness}}}{operator}{multiplicity}"
 
 def main():
     """Extended CLI for all types of unrolled plots."""
@@ -1575,8 +1509,8 @@ Examples:
                 if args.labels and i < len(args.labels):
                     plot_labels.append(args.labels[i])
                 else:
-                    # Convert to physics notation: N_{Had/Lep}^{SR/CR, Loose/Tight}=1/#ge2
-                    clean_label = plotter._convert_to_physics_notation(final_state)
+                    # Convert to SV notation: {N}SV_{flavor}^{selection}
+                    clean_label = plotter.canvas_maker._format_sv_label(final_state)
                     plot_labels.append(clean_label)
             
             # Get group labels for both cases

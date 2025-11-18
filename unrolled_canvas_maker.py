@@ -36,12 +36,12 @@ class UnrolledCanvasMaker:
             'height': 600,
             'bottom_margin': 0.15,
             'left_margin': 0.12,
-            'right_margin': 0.25
+            'right_margin': 0.15
         }
         
         # Group label configuration
         self.label_config = {
-            'group_label_size': 0.035,
+            'group_label_size': 0.038,
             'group_label_y_position': 0.87,  # Near top of canvas
             'separator_line_width': 2,
             'separator_line_color': ROOT.kBlack
@@ -351,7 +351,55 @@ class UnrolledCanvasMaker:
         
         return text_objects
     
-    def add_cms_labels(self, canvas: ROOT.TCanvas) -> List[ROOT.TLatex]:
+    def universal_cms_mark(self, cms_x: float, cms_y: float, text_size: float, 
+                           preliminary_x: float = None, preliminary_y: float = None,
+                           cms_text: str = "CMS", preliminary_text: str = "Preliminary", ) -> List[ROOT.TLatex]:
+        """
+        Universal CMS mark function with configurable positions and sizes.
+        
+        Args:
+            cms_x: X position for CMS text (NDC coordinates)
+            cms_y: Y position for CMS text (NDC coordinates)  
+            text_size: Base text size (CMS text will be 1.3x larger)
+            preliminary_x: X position for preliminary text (defaults to cms_x + 0.06)
+            preliminary_y: Y position for preliminary text (defaults to cms_y)
+            cms_text: CMS text (default: "CMS")
+            preliminary_text: Preliminary text (default: "Preliminary")
+            
+        Returns:
+            List of TLatex objects for memory management
+        """
+        if preliminary_x is None:
+            preliminary_x = cms_x + 0.06
+        if preliminary_y is None:
+            preliminary_y = cms_y
+            
+        latex_objects = []
+        
+        # Draw CMS text (1.3x larger than base text size)
+        cms_latex = ROOT.TLatex()
+        cms_latex.SetNDC()
+        cms_latex.SetTextAlign(11)  # Left bottom align
+        cms_latex.SetTextFont(61)   # Bold font
+        cms_latex.SetTextSize(text_size * 1.3)
+        cms_latex.DrawLatex(cms_x, cms_y, cms_text)
+        latex_objects.append(cms_latex)
+        
+        # Draw preliminary text (base text size)
+        prelim_latex = ROOT.TLatex()
+        prelim_latex.SetNDC() 
+        prelim_latex.SetTextAlign(11)  # Left bottom align
+        prelim_latex.SetTextFont(52)   # Italic font
+        prelim_latex.SetTextSize(text_size)
+        prelim_latex.DrawLatex(preliminary_x, preliminary_y, preliminary_text)
+        latex_objects.append(prelim_latex)
+        
+        return latex_objects
+
+    def add_cms_labels(self, canvas: ROOT.TCanvas,
+                       x_location: float = 0.12,
+                       y_location: float = 0.915,
+                       text_size: float = 0.04) -> List[ROOT.TLatex]:
         """
         Add CMS preliminary mark and luminosity label.
         
@@ -365,18 +413,18 @@ class UnrolledCanvasMaker:
         overlay_pad = canvas.GetListOfPrimitives().FindObject("overlay")
         overlay_pad.cd()
         
-        # Add CMS mark 
-        Plot.CMSmark()
+        # Use universal CMS mark
+        cms_objects = self.universal_cms_mark(x_location, y_location, text_size, preliminary_x=0.056)
         
         # Add luminosity label
         lumi_latex = ROOT.TLatex()
         lumi_latex.SetTextFont(42)
         lumi_latex.SetNDC()
-        lumi_latex.SetTextSize(0.03)
+        lumi_latex.SetTextSize(text_size)
         lumi_latex.SetTextAlign(31)  # Right align
-        lumi_latex.DrawLatex(0.72, 0.91, f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)")
+        lumi_latex.DrawLatex(0.85, y_location, f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)")
         
-        return [lumi_latex]
+        return cms_objects + [lumi_latex]
     
     def finalize_canvas(self, canvas: ROOT.TCanvas, hist: ROOT.TH1D, 
                        group_labels: List[str], error_band: Optional[ROOT.TGraphAsymmErrors] = None,
@@ -416,7 +464,8 @@ class UnrolledCanvasMaker:
         overlay_pad = canvas.GetListOfPrimitives().FindObject("overlay")
         overlay_pad.cd()
         
-        Plot.CMSmark()
+        # Use universal CMS mark
+        cms_objects = self.universal_cms_mark(0.12, 0.91, 0.04)
 
         # Add luminosity label exactly like original
         lumi_latex = ROOT.TLatex()
@@ -426,6 +475,7 @@ class UnrolledCanvasMaker:
         lumi_latex.SetTextAlign(31)
         lumi_latex.DrawLatex(0.72, 0.91, f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)")
         canvas.lumi_latex = lumi_latex
+        canvas.cms_objects_finalize = cms_objects
         
         # Store objects to prevent garbage collection
         canvas.lines = separator_lines
@@ -700,7 +750,7 @@ class UnrolledCanvasMaker:
         
         # Find maximum for proper scaling (only set on first histogram to establish axes)
         max_val = max(hist.GetMaximum() for hist in histograms)
-        histograms[0].SetMaximum(max_val * 2.5)  # 5x headroom for log scale, only on first histogram
+        histograms[0].SetMaximum(max_val * 5.)  # 5x headroom for log scale, only on first histogram
         
         # Draw histograms
         for i, (hist, draw_opt) in enumerate(zip(histograms, draw_options)):
@@ -761,7 +811,7 @@ class UnrolledCanvasMaker:
         
         # Create first histogram as invisible for axis setup
         axis_hist = histograms[0].Clone(f"{name}_axis_template")
-        axis_hist.SetMaximum(max_val * 2.5)  # 5x headroom for log scale
+        axis_hist.SetMaximum(max_val * 5.)  # 5x headroom for log scale
         axis_hist.SetLineColor(0)  # Invisible
         axis_hist.SetMarkerSize(0)  # No markers
         axis_hist.SetFillStyle(0)  # No fill
@@ -819,7 +869,7 @@ class UnrolledCanvasMaker:
         canvas.Update()
         
         # Create legend
-        legend = self.create_legend(legend_entries, 0.77, 0.51, 1.1, 0.88)
+        legend = self.create_legend(legend_entries, 0.85, 0.5, 1.05, 0.91)
         self.add_legend_to_canvas(canvas, legend)
         
         # Add decorations (creates overlay pad)
@@ -1108,7 +1158,12 @@ class UnrolledCanvasMaker:
         self._add_group_labels_datamc(overlay, group_labels, pad1)
         
         # Add CMS labels
-        self._add_cms_labels_datamc(overlay, final_state)
+        cms_objects = self._add_cms_labels_datamc(overlay)
+        
+        # Add SV label if final state is provided
+        sv_object = None
+        if final_state:
+            sv_object = self._add_sv_label_datamc(overlay, final_state)
         
         # Store objects to prevent garbage collection
         canvas.pad1 = pad1
@@ -1124,6 +1179,9 @@ class UnrolledCanvasMaker:
         canvas.mc_histograms = mc_histograms
         canvas.mc_with_integrals = mc_with_integrals
         canvas.separator_lines = separator_lines
+        canvas.cms_objects = cms_objects
+        if sv_object:
+            canvas.sv_object = sv_object
         
         canvas.Update()
         return canvas
@@ -1205,38 +1263,37 @@ class UnrolledCanvasMaker:
         
         return lines
     
-    def _add_cms_labels_datamc(self, overlay_pad: ROOT.TPad, final_state: str = None) -> None:
-        """Add CMS labels for data/MC canvas."""
-
+    def _add_cms_labels_datamc(self, overlay_pad: ROOT.TPad) -> List[ROOT.TLatex]:
+        """Add CMS labels for data/MC canvas (without SV label)."""
+        
         y_pos = 0.958
         
-        # CMS preliminary
-        latex = ROOT.TLatex()
-        latex.SetNDC()
-        latex.SetTextAlign(11)
-        latex.SetTextSize(0.052)
-
-        latex.SetTextFont(61)
-        latex.DrawLatex(0.12, y_pos, "CMS")
-
-        latex.SetTextFont(52)
-        latex.SetTextSize(0.04)
-        latex.DrawLatex(0.18, y_pos, "Preliminary")
-
-        # SV label and luminosity
-        latex.SetTextFont(42)
-        latex.SetTextAlign(31)
-        lumi_text = f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)"
+        # Use universal CMS mark
+        cms_objects = self.universal_cms_mark(0.12, y_pos, 0.04)
         
-        # Add SV label before luminosity if final state is provided
-        if final_state:
-            sv_label = self._format_sv_label(final_state)
-            latex.DrawLatex(0.63, y_pos, sv_label)
-            #latex.DrawLatex(0.415, y_pos, lumi_text)
-        #else:
-        #latex.DrawLatex(0.785, y_pos, lumi_text)
-
-        latex.DrawLatex(0.785, y_pos, lumi_text) 
+        # Add luminosity label
+        lumi_latex = ROOT.TLatex()
+        lumi_latex.SetTextFont(42)
+        lumi_latex.SetNDC()
+        lumi_latex.SetTextSize(0.04)
+        lumi_latex.SetTextAlign(31)  # Right align
+        lumi_latex.DrawLatex(0.785, y_pos, f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)")
+        
+        return cms_objects + [lumi_latex]
+    
+    def _add_sv_label_datamc(self, overlay_pad: ROOT.TPad, final_state: str, x_pos: float = 0.63, y_pos: float = 0.958) -> ROOT.TLatex:
+        """Add SV label for data/MC canvas (separate from CMS labels)."""
+        
+        sv_label = self._format_sv_label(final_state)
+        
+        sv_latex = ROOT.TLatex()
+        sv_latex.SetTextFont(42)
+        sv_latex.SetNDC()
+        sv_latex.SetTextSize(0.04)
+        sv_latex.SetTextAlign(31)  # Right align
+        sv_latex.DrawLatex(x_pos, y_pos, sv_label)
+        
+        return sv_latex 
         
     def set_canvas_config(self, **kwargs) -> None:
         """
