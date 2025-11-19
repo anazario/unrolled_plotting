@@ -40,6 +40,10 @@
    }
    printf("\n");
    
+   // Create transparent orange color for postfit plots
+   Int_t transparent_orange = TColor::GetColorTransparent(kOrange+7, 0.7);
+   printf("Registered transparent orange as index %d\n", transparent_orange);
+   
    printf("\nTo restore colors when opening ROOT files:\n");
    printf("  1. Run this rootlogon.C or\n");
    printf("  2. In the ROOT file, look for 'summary/restore_colors_macro' and execute it\n");

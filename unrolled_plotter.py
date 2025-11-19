@@ -666,6 +666,211 @@ class UnrolledPlotter:
             mc_scales, name, output_path, output_formats
         )
     
+    def create_postfit_ratio_plots(self, fit_file: str, name: str = "postfit_plot", 
+                                  output_path: str = None, output_formats: List[str] = ['root'],
+                                  normalize: bool = False) -> Dict:
+        """
+        Create post-fit vs data ratio plots from a fit file containing hdata/hpost histogram pairs.
+        
+        Args:
+            fit_file: Path to ROOT file containing hdata{channel}{suffix} and hpost{channel}{suffix} histograms
+            name: Base name for plots
+            output_path: Output file path
+            output_formats: List of output formats
+            normalize: Whether to normalize histograms
+            
+        Returns:
+            Dictionary with results for each channel
+        """
+        try:
+            import ROOT
+            
+            # Open fit file
+            root_file = ROOT.TFile(fit_file, "READ")
+            if not root_file or root_file.IsZombie():
+                return {'success': False, 'error': f'Cannot open fit file: {fit_file}'}
+            
+            # Find all histogram pairs (hdata/hpost) by channel
+            channels = self._find_histogram_channels(root_file)
+            
+            if not channels:
+                return {'success': False, 'error': 'No valid hdata/hpost histogram pairs found in fit file'}
+            
+            print(f"   🔍 Found {len(channels)} channel(s): {', '.join(channels.keys())}")
+            
+            # Create plots for each channel
+            results = {}
+            canvases = {}
+            
+            for channel_name, (hdata_name, hpost_name) in channels.items():
+                print(f"\n   📊 Processing channel: {channel_name}")
+                
+                try:
+                    # Load histograms
+                    hdata = root_file.Get(hdata_name)
+                    hpost = root_file.Get(hpost_name)
+                    
+                    if not hdata or not hpost:
+                        results[channel_name] = {'success': False, 'error': f'Missing histograms for channel {channel_name}'}
+                        continue
+                    
+                    # Convert ROOT histograms to our format
+                    data_yields, data_errors = self._extract_histogram_data(hdata)
+                    postfit_yields, postfit_errors = self._extract_histogram_data(hpost)
+                    
+                    # Get bin labels for the grouping type
+                    if self.grouping_type == 'ms':
+                        bin_labels = self.data_processor.rs_bracket_labels * 3  # 3 Ms groups, each with 3 Rs labels
+                    else:  # 'rs'
+                        bin_labels = self.data_processor.ms_bracket_labels * 3  # 3 Rs groups, each with 3 Ms labels
+                    
+                    # Create unrolled histograms using the correct method
+                    data_hist = self.histogram_maker.create_histogram(
+                        yields_1d=data_yields,
+                        errors_1d=data_errors,
+                        bin_labels=bin_labels,
+                        name=f"data_{channel_name}",
+                        title=f"Data {channel_name}",
+                        grouping_type=self.grouping_type
+                    )
+                    
+                    postfit_hist = self.histogram_maker.create_histogram(
+                        yields_1d=postfit_yields,
+                        errors_1d=postfit_errors,
+                        bin_labels=bin_labels,
+                        name=f"postfit_{channel_name}",
+                        title=f"Post-fit {channel_name}",
+                        grouping_type=self.grouping_type
+                    )
+                    
+                    # Get group labels
+                    group_labels = self.data_processor.get_group_labels(self.grouping_type)
+                    
+                    # Create ratio canvas
+                    canvas_name = f"{name}_{channel_name}_{self.grouping_type}"
+                    canvas = self.canvas_maker.create_postfit_ratio_canvas(
+                        data_hist=data_hist,
+                        postfit_hist=postfit_hist,
+                        group_labels=group_labels,
+                        name=canvas_name,
+                        normalize=normalize
+                    )
+                    
+                    results[channel_name] = {
+                        'success': True,
+                        'canvas': canvas,
+                        'data_hist': data_hist,
+                        'postfit_hist': postfit_hist
+                    }
+                    canvases[channel_name] = canvas
+                    
+                    print(f"     ✓ Created plot: {canvas_name}")
+                    
+                except Exception as e:
+                    error_msg = f"Error processing channel {channel_name}: {str(e)}"
+                    results[channel_name] = {'success': False, 'error': error_msg}
+                    print(f"     ✗ Failed: {error_msg}")
+            
+            root_file.Close()
+            
+            # Save results
+            if canvases:
+                # Generate default output path if none provided
+                if not output_path:
+                    import os
+                    fit_basename = os.path.basename(fit_file).replace('.root', '')
+                    output_path = f"{fit_basename}_{name}_postfit"
+                
+                if 'root' in output_formats:
+                    # Save all channels to single ROOT file
+                    root_output = ROOT.TFile(f"{output_path}.root", "RECREATE")
+                    for channel_name, canvas in canvases.items():
+                        canvas.Write()
+                    root_output.Close()
+                    print(f"   💾 Saved ROOT file: {output_path}.root")
+                
+                # Save other formats
+                non_root_formats = [fmt for fmt in output_formats if fmt != 'root']
+                if non_root_formats:
+                    self.canvas_maker.save_canvases_to_folder(canvases, output_path, non_root_formats)
+                    print(f"   💾 Saved {', '.join(non_root_formats)} files to: {output_path}/")
+            
+            # Update analysis summary
+            successful_channels = [ch for ch, res in results.items() if res['success']]
+            failed_channels = [ch for ch, res in results.items() if not res['success']]
+            
+            self.analysis_summary['files_processed'].append(f"Fit file: {fit_file}")
+            self.analysis_summary['plots_created'].extend([f"Post-fit ratio: {ch}" for ch in successful_channels])
+            self.analysis_summary['errors'].extend([f"Channel {ch}: {results[ch]['error']}" for ch in failed_channels])
+            
+            return {
+                'success': len(failed_channels) == 0,
+                'results': results,
+                'canvases': canvases,
+                'successful_channels': successful_channels,
+                'failed_channels': failed_channels
+            }
+            
+        except Exception as e:
+            error_msg = f"Error processing fit file {fit_file}: {str(e)}"
+            self.analysis_summary['errors'].append(error_msg)
+            return {'success': False, 'error': error_msg}
+
+    def _find_histogram_channels(self, root_file: ROOT.TFile) -> Dict[str, Tuple[str, str]]:
+        """
+        Find all hdata/hpost histogram pairs in the ROOT file.
+        
+        Returns:
+            Dictionary mapping channel names to (hdata_name, hpost_name) tuples
+        """
+        channels = {}
+        
+        # Get all histogram names
+        keys = [key.GetName() for key in root_file.GetListOfKeys()]
+        
+        # Find hdata histograms and match with corresponding hpostb
+        for key_name in keys:
+            if key_name.startswith("hdataCh"):
+                # Extract channel and region (e.g., "hdataCh1CRHad" -> channel="1", region="CRHad")
+                suffix = key_name[7:]  # Remove "hdataCh" prefix
+                
+                # Find the channel number (should be first character)
+                channel_num = suffix[0]
+                region = suffix[1:]  # Rest is the region (e.g., "CRHad", "CRLep")
+                
+                # Look for corresponding hpostb histogram
+                hpost_name = f"hpostbCh{channel_num}{region}"
+                if hpost_name in keys:
+                    channel_name = f"ch{channel_num}_{region}"
+                    channels[channel_name] = (key_name, hpost_name)
+                    
+        return channels
+    
+    def _extract_histogram_data(self, hist: ROOT.TH1) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Extract yields and errors from a ROOT histogram.
+        
+        Args:
+            hist: ROOT histogram with 9 bins
+            
+        Returns:
+            Tuple of (yields, errors) as numpy arrays
+        """
+        import numpy as np
+        
+        n_bins = hist.GetNbinsX()
+        if n_bins != 9:
+            raise ValueError(f"Expected 9 bins, got {n_bins}")
+        
+        yields = np.zeros(9)
+        errors = np.zeros(9)
+        
+        for i in range(9):
+            yields[i] = hist.GetBinContent(i + 1)  # ROOT bins start at 1
+            errors[i] = hist.GetBinError(i + 1)
+        
+        return yields, errors
+    
     def create_multi_datamc_ratio_plots(self, data_file: str, mc_files: List[str], 
                                       final_state_flags: List[str],
                                       mc_labels: List[str] = None,
@@ -1328,10 +1533,14 @@ Examples:
                        help='Background ROOT files') 
     parser.add_argument('--data', type=str, nargs='*', default=[],
                        help='Data ROOT files')
+    parser.add_argument('--fit-file', type=str, 
+                       help='Post-fit ROOT file containing hdata/hpost histogram pairs')
     
-    # Data/MC ratio plot option
+    # Plot type options
     parser.add_argument('--datamc-ratio', action='store_true',
                        help='Create Data/MC ratio plot with stacked backgrounds')
+    parser.add_argument('--postfit-ratio', action='store_true',
+                       help='Create Data/Post-fit ratio plot from fit file')
     
     # Final state selections
     parser.add_argument('--final-state', type=str, 
@@ -1374,11 +1583,24 @@ Examples:
     
     # Validate inputs
     total_files = len(args.signal) + len(args.background) + len(args.data)
-    if total_files == 0:
-        parser.error("Must provide at least one input file")
+    has_fit_file = bool(args.fit_file)
+    
+    if total_files == 0 and not has_fit_file:
+        parser.error("Must provide at least one input file or --fit-file")
     
     if args.final_states and total_files > 1 and not args.datamc_ratio:
         parser.error("--final-states can only be used with a single input file (unless using --datamc-ratio)")
+    
+    # Validate plot type options
+    plot_types = [args.datamc_ratio, args.postfit_ratio]
+    if sum(plot_types) > 1:
+        parser.error("Can only specify one plot type: --datamc-ratio or --postfit-ratio")
+    
+    if args.postfit_ratio and not has_fit_file:
+        parser.error("--postfit-ratio requires --fit-file")
+    
+    if has_fit_file and not args.postfit_ratio:
+        parser.error("--fit-file requires --postfit-ratio")
     
     # Create plotter
     plotter = UnrolledPlotter(
@@ -1433,6 +1655,30 @@ Examples:
                 output_formats=args.output_formats,
                 normalize=args.normalize
             )
+        
+    elif args.postfit_ratio:
+        # Post-fit vs Data ratio plot mode
+        print(f"   📊 Mode: Post-fit vs Data ratio plots")
+        print(f"   📁 Fit file: {args.fit_file}")
+        
+        # Set default grouping to 'rs' for fit files, but allow override
+        if args.grouping == 'ms':  # Only change if default wasn't overridden
+            effective_grouping = 'rs'
+            print(f"   ⚙️  Using default grouping 'rs' for fit files (override with --grouping)")
+        else:
+            effective_grouping = args.grouping
+            
+        # Update plotter grouping
+        plotter.grouping_type = effective_grouping
+        
+        # Create post-fit ratio plots for each channel
+        result = plotter.create_postfit_ratio_plots(
+            fit_file=args.fit_file,
+            name=args.name,
+            output_path=args.output_file,
+            output_formats=args.output_formats,
+            normalize=args.normalize
+        )
         
     elif args.final_states:
         # Multiple final states from single file - create both Ms and Rs grouped versions

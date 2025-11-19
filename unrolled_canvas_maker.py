@@ -89,21 +89,21 @@ class UnrolledCanvasMaker:
         
         Convention:
         - N: total count of SVs (only shown for 2 or more, just shows "2")
-        - flavor: 'hh' (hadronic) or 'll' (leptonic)
+        - flavor: 'hh' (hadronic) or '\\ell\\ell' (leptonic)
         - selection: CRL, SRL, CRT, SRT
-        - mixed case: SV_{ll}SV_{hh}^{selection}
+        - mixed case: SV_{\\ell\\ell}SV_{hh}^{selection}
         
         Examples:
         - passNHad1SelectionSRLoose -> SV_{hh}^{SRL} (single hadronic, signal region loose)
-        - passNLep1SelectionSRTight -> SV_{ll}^{SRT} (single leptonic, signal region tight)
+        - passNLep1SelectionSRTight -> SV_{\\ell\\ell}^{SRT} (single leptonic, signal region tight)
         - passNHad2SelectionCRLoose -> 2SV_{hh}^{CRL} (two hadronic, control region loose)
-        - passNLepNHadSelectionSRTight -> SV_{ll}SV_{hh}^{SRT} (mixed)
+        - passNLepNHadSelectionSRTight -> SV_{\\ell\\ell}SV_{hh}^{SRT} (mixed)
         """
         import re
         
         # Default values
         count = ""
-        flavor = "had"  # default to hadronic
+        flavor = "hh"  # default to hadronic
         selection = "SRT"  # default to signal region tight
         
         # Parse the branch name pattern: passN{Had|Lep}{count}Selection{SR|CR}{Loose|Tight}
@@ -113,17 +113,17 @@ class UnrolledCanvasMaker:
             # Mixed case - still need to extract selection
             if "CR" in final_state:
                 if "Loose" in final_state:
-                    selection = "CRL"
+                    selection = "CR,L"
                 else:
-                    selection = "CRT"
+                    selection = "CR,T"
             elif "SR" in final_state:
                 if "Loose" in final_state:
-                    selection = "SRL"
+                    selection = "SR,L"
                 else:
-                    selection = "SRT"
-            return f"SV_{{lep}}SV_{{had}}^{{{selection}}}"
+                    selection = "SR,T"
+            return f"SV_{{\\ell\\ell}}SV_{{hh}}^{{{selection}}}"
         elif "NHad" in final_state:
-            flavor = "had"  # hadronic
+            flavor = "hh"  # hadronic
             # Check for Ge2 (2 or more) pattern
             if "HadGe2" in final_state:
                 count = "2"
@@ -135,7 +135,7 @@ class UnrolledCanvasMaker:
                     if sv_count >= 2:
                         count = "2"
         elif "NLep" in final_state:
-            flavor = "lep"  # leptonic
+            flavor = "\\ell\\ell"  # leptonic
             # Check for Ge2 (2 or more) pattern  
             if "LepGe2" in final_state:
                 count = "2"
@@ -150,14 +150,14 @@ class UnrolledCanvasMaker:
         # Extract selection region
         if "CR" in final_state:
             if "Loose" in final_state:
-                selection = "CRL"
+                selection = "CR,L"
             else:
-                selection = "CRT"
+                selection = "CR,T"
         elif "SR" in final_state:
             if "Loose" in final_state:
-                selection = "SRL"
+                selection = "SR,L"
             else:
-                selection = "SRT"
+                selection = "SR,T"
         
         # Format final label
         return f"{count}SV_{{{flavor}}}^{{{selection}}}"
@@ -414,7 +414,7 @@ class UnrolledCanvasMaker:
         overlay_pad.cd()
         
         # Use universal CMS mark
-        cms_objects = self.universal_cms_mark(x_location, y_location, text_size, preliminary_x=0.056)
+        cms_objects = self.universal_cms_mark(x_location, y_location, text_size, preliminary_x=x_location+0.056)
         
         # Add luminosity label
         lumi_latex = ROOT.TLatex()
@@ -886,34 +886,19 @@ class UnrolledCanvasMaker:
         
         return canvas
     
-    def create_datamc_ratio_canvas(self, data_hist: ROOT.TH1D, mc_histograms: List[Tuple], 
-                                  group_labels: List[str], name: str, normalize: bool = False, 
-                                  final_state: str = None) -> ROOT.TCanvas:
+    def _create_base_ratio_canvas(self, name: str, normalize: bool = False) -> Tuple[ROOT.TCanvas, ROOT.TPad, ROOT.TPad]:
         """
-        Create a two-pad canvas with stacked MC backgrounds and data/MC ratio.
+        Create base two-pad canvas structure for ratio plots.
         
         Args:
-            data_hist: Data histogram
-            mc_histograms: List of tuples (histogram, label) for MC backgrounds
-            group_labels: Group labels for the plot
             name: Canvas name
-            normalize: Whether to normalize histograms
-            final_state: Final state name for SV label (optional)
+            normalize: Whether this will be used for normalized plots
             
         Returns:
-            Canvas with two pads and Data/MC comparison
+            Tuple of (canvas, top_pad, bottom_pad)
         """
-        if not mc_histograms:
-            raise ValueError("No MC histograms provided")
-        
-        # Normalize data histogram if requested
-        if normalize:
-            from unrolled_histogram_maker import UnrolledHistogramMaker
-            hist_maker = UnrolledHistogramMaker()
-            data_hist = hist_maker.normalize_histogram(data_hist, 'unity')
-        
         # Create canvas with increased right margin for external legend
-        canvas = ROOT.TCanvas(f"{name}_datamc", "", 
+        canvas = ROOT.TCanvas(name, "", 
                             self.canvas_config['width'] + 100, 
                             self.canvas_config['height'] + 100)
         
@@ -951,6 +936,99 @@ class UnrolledCanvasMaker:
         canvas.cd()
         pad1.Draw()
         pad2.Draw()
+        
+        return canvas, pad1, pad2
+
+    def _create_ratio_histogram(self, numerator: ROOT.TH1D, denominator: ROOT.TH1D, 
+                               name: str, ratio_title: str = "#frac{data}{model}") -> ROOT.TH1D:
+        """
+        Create ratio histogram with proper styling.
+        
+        Args:
+            numerator: Numerator histogram
+            denominator: Denominator histogram
+            name: Name for ratio histogram
+            ratio_title: Y-axis title for ratio
+            
+        Returns:
+            Styled ratio histogram
+        """
+        # Create unique name to avoid ROOT caching issues
+        import time
+        timestamp = str(int(time.time() * 1000000))
+        
+        # Create ratio histogram with unique name
+        ratio_hist = numerator.Clone(f"ratio_{timestamp}_{name}")
+        
+        # Perform division with protection against extreme values
+        ratio_hist.Divide(denominator)
+        
+        # Cap extreme ratio values to prevent y-axis scaling issues
+        for i in range(1, ratio_hist.GetNbinsX() + 1):
+            ratio_val = ratio_hist.GetBinContent(i)
+            ratio_err = ratio_hist.GetBinError(i)
+            
+            # If ratio is extreme (> 10 or < 0.1), cap it or set to 0
+            if ratio_val > 10.0:
+                ratio_hist.SetBinContent(i, 0.0)
+                ratio_hist.SetBinError(i, 0.0)
+            elif ratio_val < 0.1 and ratio_val > 0:
+                ratio_hist.SetBinContent(i, 0.0)
+                ratio_hist.SetBinError(i, 0.0)
+        
+        # Style ratio
+        ratio_hist.SetMarkerStyle(20)
+        ratio_hist.SetMarkerSize(1.0)
+        ratio_hist.SetLineColor(ROOT.kBlack)
+        ratio_hist.SetMarkerColor(ROOT.kBlack)
+        ratio_hist.SetLineStyle(1)
+        ratio_hist.SetStats(0)  # Disable statistics box
+        
+        # Set axis properties for ratio
+        ratio_hist.GetXaxis().SetTitle("R_{S}" if "ms" in name.lower() else "M_{S} [TeV]")
+        ratio_hist.GetYaxis().SetTitle(ratio_title)
+        ratio_hist.GetYaxis().SetRangeUser(0.5, 1.5)
+        ratio_hist.GetXaxis().SetTitleSize(0.15)
+        ratio_hist.GetYaxis().SetTitleSize(0.15)
+        ratio_hist.GetXaxis().SetLabelSize(0.18)
+        ratio_hist.GetXaxis().SetLabelOffset(0.02)
+        ratio_hist.GetYaxis().SetLabelSize(0.12)
+        ratio_hist.GetYaxis().SetTitleOffset(0.37)
+        ratio_hist.GetXaxis().SetTitleOffset(1.25)
+        ratio_hist.GetYaxis().SetNdivisions(505)
+        ratio_hist.GetXaxis().CenterTitle()
+        ratio_hist.GetYaxis().CenterTitle()
+        
+        return ratio_hist
+
+    def create_datamc_ratio_canvas(self, data_hist: ROOT.TH1D, mc_histograms: List[Tuple], 
+                                  group_labels: List[str], name: str, normalize: bool = False, 
+                                  final_state: str = None) -> ROOT.TCanvas:
+        """
+        Create a two-pad canvas with stacked MC backgrounds and data/MC ratio.
+        
+        Args:
+            data_hist: Data histogram
+            mc_histograms: List of tuples (histogram, label) for MC backgrounds
+            group_labels: Group labels for the plot
+            name: Canvas name
+            normalize: Whether to normalize histograms
+            final_state: Final state name for SV label (optional)
+            
+        Returns:
+            Canvas with two pads and Data/MC comparison
+        """
+        if not mc_histograms:
+            raise ValueError("No MC histograms provided")
+        
+        # Normalize data histogram if requested
+        if normalize:
+            from unrolled_histogram_maker import UnrolledHistogramMaker
+            hist_maker = UnrolledHistogramMaker()
+            data_hist = hist_maker.normalize_histogram(data_hist, 'unity')
+        
+        # Use base ratio canvas setup
+        canvas, pad1, pad2 = self._create_base_ratio_canvas(f"{name}_datamc", normalize)
         
         # === Top pad: Stacked distributions ===
         pad1.cd()
@@ -1073,31 +1151,8 @@ class UnrolledCanvasMaker:
         # === Bottom pad: Ratio ===
         pad2.cd()
         
-        # Create ratio histogram
-        ratio_hist = data_hist.Clone("ratio")
-        ratio_hist.Divide(total_mc)
-        
-        # Style ratio
-        ratio_hist.SetMarkerStyle(20)
-        ratio_hist.SetMarkerSize(1.0)
-        ratio_hist.SetLineColor(ROOT.kBlack)
-        ratio_hist.SetMarkerColor(ROOT.kBlack)
-        ratio_hist.SetLineStyle(1)
-        
-        # Set axis properties for ratio
-        ratio_hist.GetXaxis().SetTitle("R_{S}" if "ms" in name.lower() else "M_{S} [TeV]")
-        ratio_hist.GetYaxis().SetTitle("#frac{data}{model}")
-        ratio_hist.GetYaxis().SetRangeUser(0.5, 1.5)
-        ratio_hist.GetXaxis().SetTitleSize(0.15)
-        ratio_hist.GetYaxis().SetTitleSize(0.15)
-        ratio_hist.GetXaxis().SetLabelSize(0.18)
-        ratio_hist.GetXaxis().SetLabelOffset(0.02)
-        ratio_hist.GetYaxis().SetLabelSize(0.12)
-        ratio_hist.GetYaxis().SetTitleOffset(0.37)
-        ratio_hist.GetXaxis().SetTitleOffset(1.25)
-        ratio_hist.GetYaxis().SetNdivisions(505)
-        ratio_hist.GetXaxis().CenterTitle()
-        ratio_hist.GetYaxis().CenterTitle()
+        # Use helper method to create ratio histogram
+        ratio_hist = self._create_ratio_histogram(data_hist, total_mc, name, "#frac{data}{model}")
         
         # Set bin labels on ratio plot
         for i in range(1, ratio_hist.GetNbinsX() + 1):
@@ -1184,6 +1239,201 @@ class UnrolledCanvasMaker:
             canvas.sv_object = sv_object
         
         canvas.Update()
+        return canvas
+    
+    def create_postfit_ratio_canvas(self, data_hist: ROOT.TH1D, postfit_hist: ROOT.TH1D, 
+                                   group_labels: List[str], name: str, normalize: bool = False) -> ROOT.TCanvas:
+        """Simple postfit vs data comparison."""
+        
+        # Extract values and create fresh histograms
+        postfit_values = []
+        postfit_errors = []
+        for i in range(1, postfit_hist.GetNbinsX() + 1):
+            postfit_values.append(postfit_hist.GetBinContent(i))
+            postfit_errors.append(postfit_hist.GetBinError(i))
+        
+        data_values = []
+        data_errors = []
+        for i in range(1, data_hist.GetNbinsX() + 1):
+            data_values.append(data_hist.GetBinContent(i))
+            data_errors.append(data_hist.GetBinError(i))
+        
+        # Create fresh histograms
+        fresh_postfit = ROOT.TH1D(f"postfit_{name}", "Post-fit", 9, 0, 9)
+        fresh_data = ROOT.TH1D(f"data_{name}", "Data", 9, 0, 9)
+
+        fresh_postfit.SetDirectory(0)
+        fresh_data.SetDirectory(0)
+        fresh_postfit.SetStats(0)
+        fresh_data.SetStats(0)
+        
+        # Store immediately to prevent garbage collection
+        ROOT.SetOwnership(fresh_postfit, False)
+        ROOT.SetOwnership(fresh_data, False)
+        
+        # Set bin labels based on grouping type
+        if "ms" in name.lower():
+            # MS grouping: RS labels for each bin
+            bin_labels = ["[0.15,0.3]", "[0.3,0.4]", "[0.4,inf]"] * 3  
+        else:
+            # RS grouping: MS labels for each bin  
+            bin_labels = ["[1.0,2.0]", "[2.0,3.0]", "[3.0,inf]"] * 3
+            
+        for i, label in enumerate(bin_labels):
+            fresh_postfit.GetXaxis().SetBinLabel(i + 1, label)
+            fresh_data.GetXaxis().SetBinLabel(i + 1, label)
+        
+        for i, (pval, perr, dval, derr) in enumerate(zip(postfit_values, postfit_errors, data_values, data_errors)):
+            fresh_postfit.SetBinContent(i + 1, pval)
+            fresh_postfit.SetBinError(i + 1, perr)
+            fresh_data.SetBinContent(i + 1, dval)
+            fresh_data.SetBinError(i + 1, derr)
+            
+        
+        # Use base ratio canvas setup like datamc
+        canvas, pad1, pad2 = self._create_base_ratio_canvas(f"{name}_postfit", normalize)
+        
+        # === Top pad: Distribution comparison (copy from datamc) ===
+        pad1.cd()
+        
+        # Set axis ranges with increased maximum
+        max_val = max(fresh_data.GetMaximum(), fresh_postfit.GetMaximum())
+        fresh_postfit.SetMinimum(0.5)
+        fresh_postfit.SetMaximum(max_val * 5.0)  # Increased from 1.5 to 5.0 for more space
+        
+        # Draw axis first like datamc function
+        fresh_postfit.Draw("AXIS")
+        fresh_postfit.GetXaxis().SetLabelSize(0)  # Hide x-labels on top pad
+        
+        # Set appropriate y-axis title
+        if normalize:
+            fresh_postfit.GetYaxis().SetTitle("normalized events")
+        else:
+            fresh_postfit.GetYaxis().SetTitle("number of events")
+            
+        fresh_postfit.GetYaxis().CenterTitle()
+        fresh_postfit.GetYaxis().SetTitleSize(0.06)
+        fresh_postfit.GetYaxis().SetLabelSize(0.05)
+        pad1.Update()  # Force update to establish axis
+        pad1.RedrawAxis("G")  # Draw grid lines behind everything
+        
+        # Style and draw postfit
+        # Use a fixed transparent orange color index or create once
+        if not hasattr(ROOT, '_transparent_orange_index'):
+            ROOT._transparent_orange_index = ROOT.TColor.GetColorTransparent(ROOT.kOrange+7, 0.7)
+        fresh_postfit.SetFillColor(ROOT._transparent_orange_index)
+        fresh_postfit.SetLineColor(ROOT.kBlack)
+        fresh_postfit.SetLineWidth(1)
+        fresh_postfit.SetLineStyle(1)
+        fresh_postfit.SetFillStyle(1001)  # Solid fill
+        fresh_postfit.Draw("HIST SAME")
+        
+        # Create and style uncertainty band like datamc
+        postfit_uncertainty = fresh_postfit.Clone("postfit_uncertainty")
+        postfit_uncertainty.SetDirectory(0)
+        postfit_uncertainty.SetFillStyle(3244)  # Hatched pattern
+        postfit_uncertainty.SetFillColor(ROOT.kBlack)
+        postfit_uncertainty.SetLineColor(ROOT.kBlack)
+        postfit_uncertainty.SetLineWidth(1)  # Box border for legend
+        postfit_uncertainty.SetLineStyle(1)  # Solid line for legend border
+        postfit_uncertainty.Draw("E2 SAME")  # E2 = error band
+        
+        # Style and draw data  
+        fresh_data.SetMarkerStyle(20)
+        fresh_data.SetMarkerSize(1.0)
+        fresh_data.SetLineColor(ROOT.kBlack)
+        fresh_data.SetMarkerColor(ROOT.kBlack)
+        fresh_data.SetLineStyle(1)
+        fresh_data.Draw("PEX0 SAME")
+        
+        # === Bottom pad: Ratio (copy from datamc) ===
+        pad2.cd()
+        
+        # Create ratio histogram
+        ratio_hist = fresh_data.Clone(f"ratio_{name}")
+        ratio_hist.SetDirectory(0)
+        ratio_hist.SetTitle("")  # Remove title to avoid "Data" label
+        ratio_hist.Divide(fresh_postfit)
+        
+        # Style ratio like datamc
+        ratio_hist.SetMarkerStyle(20)
+        ratio_hist.SetMarkerSize(1.0)
+        ratio_hist.SetLineColor(ROOT.kBlack)
+        ratio_hist.SetMarkerColor(ROOT.kBlack)
+        ratio_hist.SetLineStyle(1)
+        
+        # Set axis properties like datamc
+        ratio_hist.GetXaxis().SetTitle("R_{S}" if "ms" in name.lower() else "M_{S} [TeV]")
+        ratio_hist.GetYaxis().SetTitle("#frac{data}{post-fit}")
+        ratio_hist.GetYaxis().SetRangeUser(0.5, 1.5)
+        ratio_hist.GetXaxis().SetTitleSize(0.15)
+        ratio_hist.GetYaxis().SetTitleSize(0.15)
+        ratio_hist.GetXaxis().SetLabelSize(0.18)
+        ratio_hist.GetXaxis().SetLabelOffset(0.02)
+        ratio_hist.GetYaxis().SetLabelSize(0.12)
+        ratio_hist.GetYaxis().SetTitleOffset(0.37)
+        ratio_hist.GetXaxis().SetTitleOffset(1.25)
+        ratio_hist.GetYaxis().SetNdivisions(505)
+        ratio_hist.GetXaxis().CenterTitle()
+        ratio_hist.GetYaxis().CenterTitle()
+        
+        # Set bin labels on ratio plot
+        for i in range(1, ratio_hist.GetNbinsX() + 1):
+            if i <= fresh_data.GetNbinsX():
+                ratio_hist.GetXaxis().SetBinLabel(i, fresh_data.GetXaxis().GetBinLabel(i))
+        
+        ratio_hist.Draw("PEX0")
+        
+        # Reference line at 1
+        x_min = ratio_hist.GetXaxis().GetXmin()
+        x_max = ratio_hist.GetXaxis().GetXmax()
+        line = ROOT.TLine(x_min, 1, x_max, 1)
+        line.SetLineStyle(2)
+        line.SetLineColor(ROOT.kBlack)
+        line.Draw()
+        
+        # === Create external legend like datamc ===
+        canvas.cd()
+        
+        legend = ROOT.TLegend(0.8, 0.7, 1.05, 0.9)
+        legend.SetBorderSize(0)
+        legend.SetFillStyle(0)
+        legend.SetTextSize(0.035)
+        legend.SetMargin(0.15)
+        
+        legend.AddEntry(fresh_data, "data", "pe")
+        legend.AddEntry(postfit_uncertainty, "post-fit uncertainty", "f")
+        legend.AddEntry(fresh_postfit, "post-fit", "f")
+        legend.Draw()
+        
+        # === Add decorations like datamc ===
+        canvas.cd()
+        
+        overlay = ROOT.TPad("overlay", "overlay", 0, 0, 1, 1)
+        overlay.SetFillStyle(0)
+        overlay.SetFrameFillStyle(0)
+        overlay.SetBorderSize(0)
+        overlay.SetMargin(0, 0, 0, 0)
+        overlay.Draw()
+        overlay.cd()
+        
+        separator_lines = self._add_separator_lines_datamc(overlay, fresh_data, pad1)
+        self._add_group_labels_datamc(overlay, group_labels, pad1)
+        cms_objects = self._add_cms_labels_datamc(overlay)
+        
+        # Store objects to prevent garbage collection
+        canvas.pad1 = pad1
+        canvas.pad2 = pad2
+        canvas.fresh_postfit = fresh_postfit
+        canvas.fresh_data = fresh_data
+        canvas.postfit_uncertainty = postfit_uncertainty
+        canvas.ratio_hist = ratio_hist
+        canvas.line = line
+        canvas.legend = legend
+        canvas.overlay = overlay
+        canvas.separator_lines = separator_lines
+        canvas.cms_objects = cms_objects
+        
         return canvas
     
     def _add_group_labels_datamc(self, overlay_pad: ROOT.TPad, group_labels: List[str], main_pad: ROOT.TPad) -> None:
@@ -1281,19 +1531,29 @@ class UnrolledCanvasMaker:
         
         return cms_objects + [lumi_latex]
     
-    def _add_sv_label_datamc(self, overlay_pad: ROOT.TPad, final_state: str, x_pos: float = 0.63, y_pos: float = 0.958) -> ROOT.TLatex:
+    def _add_sv_label_datamc(self, overlay_pad: ROOT.TPad, final_state: str, x_pos: float = 0.63, y_pos: float = 0.958):
         """Add SV label for data/MC canvas (separate from CMS labels)."""
         
         sv_label = self._format_sv_label(final_state)
         
-        sv_latex = ROOT.TLatex()
-        sv_latex.SetTextFont(42)
-        sv_latex.SetNDC()
-        sv_latex.SetTextSize(0.04)
-        sv_latex.SetTextAlign(31)  # Right align
-        sv_latex.DrawLatex(x_pos, y_pos, sv_label)
+        # Use TMathText for labels containing \\ell\\ell, otherwise use TLatex
+        if "\\ell\\ell" in sv_label:
+            ROOT.gEnv.SetValue("TMathText.FontResolution", 200)
+            sv_text = ROOT.TMathText()
+            sv_text.SetTextFont(42)
+            sv_text.SetNDC()
+            sv_text.SetTextSize(0.04)
+            sv_text.SetTextAlign(31)  # Right align
+            sv_text.DrawMathText(x_pos, y_pos, sv_label)
+        else:
+            sv_text = ROOT.TLatex()
+            sv_text.SetTextFont(42)
+            sv_text.SetNDC()
+            sv_text.SetTextSize(0.04)
+            sv_text.SetTextAlign(31)  # Right align
+            sv_text.DrawLatex(x_pos, y_pos, sv_label)
         
-        return sv_latex 
+        return sv_text 
         
     def set_canvas_config(self, **kwargs) -> None:
         """
