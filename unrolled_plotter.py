@@ -756,15 +756,28 @@ class UnrolledPlotter:
                         normalize=normalize
                     )
                     
+                    # Create single-pad canvas (non-ratio version)
+                    single_canvas_name = f"{name}_{channel_name}_{self.grouping_type}_single"
+                    single_canvas = self.canvas_maker.create_postfit_single_canvas(
+                        data_hist=data_hist,
+                        postfit_hist=postfit_hist,
+                        group_labels=group_labels,
+                        name=single_canvas_name,
+                        normalize=normalize
+                    )
+                    
                     results[channel_name] = {
                         'success': True,
                         'canvas': canvas,
+                        'single_canvas': single_canvas,
                         'data_hist': data_hist,
                         'postfit_hist': postfit_hist
                     }
                     canvases[channel_name] = canvas
+                    canvases[f"{channel_name}_single"] = single_canvas
                     
-                    print(f"     ✓ Created plot: {canvas_name}")
+                    print(f"     ✓ Created ratio plot: {canvas_name}")
+                    print(f"     ✓ Created single plot: {single_canvas_name}")
                     
                 except Exception as e:
                     error_msg = f"Error processing channel {channel_name}: {str(e)}"

@@ -36,7 +36,7 @@ class SVVariablesPlotter:
             'HadronicSV_pOverE': (np.linspace(0.6, 1, 26), 'p/E', True),
             'HadronicSV_decayAngle': (np.linspace(-1, 1, 26), 'cos#theta_{CM}^{*}', True),
             'HadronicSV_cosTheta': (np.linspace(0., 1, 26), 'cos#theta', True),
-            'HadronicSV_dxySig': (np.linspace(0, 1000, 26), 'S_{xy}', True),
+            'HadronicSV_dxySig': (np.linspace(0, 1000, 26), 'd_{xy}/#sigma_{d_{xy}}', True),
             'rjr_Ms_0': (np.linspace(0, 8000, 51), 'M_{S} [GeV]', True),
             'rjr_Rs_0': (np.linspace(0, 1, 51), 'R_{S}', True),
             'selCMet': (np.linspace(0, 1000, 51), 'p_{T}^{miss} [GeV]', True)
@@ -48,7 +48,7 @@ class SVVariablesPlotter:
             'LeptonicSV_pOverE': (np.linspace(0.6, 1, 26), 'p/E', True),
             'LeptonicSV_decayAngle': (np.linspace(-1, 1, 26), 'cos#theta_{CM}^{*}', True),
             'LeptonicSV_cosTheta': (np.linspace(0.75, 1, 26), 'cos#theta', True),
-            'LeptonicSV_dxySig': (np.linspace(0, 1000, 26), 'S_{xy}', True),
+            'LeptonicSV_dxySig': (np.linspace(0, 1000, 26), 'd_{xy}/#sigma_{d_{xy}}', True),
             'rjr_Ms_0': (np.linspace(0, 8000, 51), 'M_{S} [GeV]', True),
             'rjr_Rs_0': (np.linspace(0, 1, 51), 'R_{S}', True),
             'selCMet': (np.linspace(0, 1000, 51), 'p_{T}^{miss} [GeV]', True)
@@ -149,19 +149,29 @@ class SVVariablesPlotter:
                 
                 tree = file[tree_name]
                 
-                # Load required branches for SV variable plotting
-                branches_to_load = [
-                    'evtFillWgt',
-                    'SV_nLeptonic', 'SV_nHadronic',
+                data = {}
+                
+                # Core branches (always try to load these)
+                core_branches = [
+                    'evtFillWgt', 'SV_nLeptonic', 'SV_nHadronic',
                     'HadronicSV_dxySig', 'HadronicSV_mass', 'HadronicSV_dxy',
                     'HadronicSV_pOverE', 'HadronicSV_decayAngle', 'HadronicSV_cosTheta',
                     'LeptonicSV_dxySig', 'LeptonicSV_mass', 'LeptonicSV_dxy',
                     'LeptonicSV_pOverE', 'LeptonicSV_decayAngle', 'LeptonicSV_cosTheta',
-                    'rjr_Ms', 'rjr_Rs', 'selCMet', 'hlt_flags', 'Flag_MetFilters', 'rjrPTS'
+                    'rjr_Ms', 'rjr_Rs', 'selCMet', 'hlt_flags', 'rjrPTS'
                 ]
                 
-                data = {}
-                for branch in branches_to_load:
+                # MET filter branches 
+                met_filter_branches = [
+                    'Flag_MetFilters',
+                    'Flag_BadChargedCandidateFilter', 'Flag_BadPFMuonDzFilter', 'Flag_BadPFMuonFilter',
+                    'Flag_HBHENoiseFilter', 'Flag_HBHENoiseIsoFilter', 'Flag_ecalBadCalibFilter',
+                    'Flag_eeBadScFilter', 'Flag_goodVertices', 'Flag_hfNoisyHitsFilter', 
+                    'Flag_EcalDeadCellTriggerPrimitiveFilter'
+                ]
+                
+                # Load core branches with warnings
+                for branch in core_branches:
                     try:
                         array_data = tree[branch].array(library='np')
                         # Handle jagged arrays for rjr_Ms and rjr_Rs
@@ -172,6 +182,14 @@ class SVVariablesPlotter:
                             data[branch] = array_data
                     except uproot.KeyInFileError:
                         print(f"Warning: Branch '{branch}' not found in {file_path}")
+                        data[branch] = None
+                
+                # Load MET filter branches silently (no warnings for MC files that don't have them)
+                for branch in met_filter_branches:
+                    try:
+                        array_data = tree[branch].array(library='np')
+                        data[branch] = array_data
+                    except uproot.KeyInFileError:
                         data[branch] = None
                 
                 return data
@@ -354,8 +372,18 @@ class RegionSelector:
             mask &= file_data['hlt_flags'].astype(bool)
         
         # Apply Flag_MetFilters (all file types)
+        # Handle both combined Flag_MetFilters and individual flags for 2017 data
         if 'Flag_MetFilters' in file_data and file_data['Flag_MetFilters'] is not None:
-            mask &= file_data['Flag_MetFilters'].astype(bool)
+            # Check if the combined Flag_MetFilters actually works (some events pass)
+            n_pass_combined = np.sum(file_data['Flag_MetFilters'].astype(bool))
+            if n_pass_combined > 0:
+                mask &= file_data['Flag_MetFilters'].astype(bool)
+            else:
+                # Combined filter kills all events - use individual filters instead
+                mask &= self._apply_individual_met_filters(file_data, n_events)
+        else:
+            # No combined filter - use individual MET filter flags (for 2017 data)
+            mask &= self._apply_individual_met_filters(file_data, n_events)
         
         # Apply selCMet > 150 (all file types)
         if 'selCMet' in file_data and file_data['selCMet'] is not None:
@@ -378,6 +406,48 @@ class RegionSelector:
             else:
                 rjrpts_values = rjrpts_data
             mask &= rjrpts_values < 150
+        
+        return mask
+    
+    def _apply_individual_met_filters(self, file_data: Dict, n_events: int) -> np.ndarray:
+        """Apply individual MET filter flags for 2017 data."""
+        mask = np.ones(n_events, dtype=bool)
+        
+        # List of MET filter flags to check (excluding problematic ones for 2017)
+        working_met_filters = [
+            'Flag_BadChargedCandidateFilter',
+            'Flag_BadPFMuonFilter',  # Skip Flag_BadPFMuonDzFilter (0% pass in 2017)
+            'Flag_HBHENoiseFilter',
+            'Flag_HBHENoiseIsoFilter',
+            'Flag_ecalBadCalibFilter',
+            'Flag_eeBadScFilter',
+            'Flag_goodVertices'
+            # Skip Flag_hfNoisyHitsFilter (0% pass in 2017)
+            # Skip Flag_EcalDeadCellTriggerPrimitiveFilter (0% pass in 2017)
+        ]
+        
+        applied_filters = 0
+        for filter_name in working_met_filters:
+            if filter_name in file_data and file_data[filter_name] is not None:
+                try:
+                    filter_data = file_data[filter_name]
+                    # Ensure it's a numpy array
+                    if not isinstance(filter_data, np.ndarray):
+                        continue
+                    
+                    # Quick check: if all events fail this filter, skip it
+                    n_pass = np.sum(filter_data.astype(bool))
+                    if n_pass == 0:
+                        continue  # Skip without printing (reduce verbosity)
+                    
+                    mask = mask & filter_data.astype(bool)
+                    applied_filters += 1
+                except Exception as e:
+                    # Skip problematic filters silently
+                    continue
+        
+        # Only print if debugging needed
+        # print(f"Applied {applied_filters} individual MET filter flags")
         
         return mask
     
@@ -505,7 +575,7 @@ class RegionSelector:
     def extract_variable_values(self, file_data: Dict, file_type: str, 
                               variable_name: str, event_mask: np.ndarray, luminosity: float = 400.0) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Extract variable values and weights for events passing selection.
+        Extract variable values and weights for events passing selection using vectorized operations.
         
         Args:
             file_data: Loaded ROOT file data
@@ -516,71 +586,61 @@ class RegionSelector:
         Returns:
             Tuple of (values, weights) arrays
         """
-        values = []
-        weights = []
+        # Get indices of passing events
+        passing_indices = np.where(event_mask)[0]
+        if len(passing_indices) == 0:
+            return np.array([]), np.array([])
         
-        n_events = len(event_mask)
-        
-        n_passed = 0
-        for i in range(n_events):
-            if not event_mask[i]:
-                continue
-            n_passed += 1
-            
-            # Get base event weight
-            if file_type == 'data':
-                base_event_weight = 1.0
+        # Get weights for passing events
+        if file_type == 'data':
+            weights = np.ones(len(passing_indices))
+        else:
+            if file_data['evtFillWgt'] is not None:
+                weights = file_data['evtFillWgt'][passing_indices] * luminosity
             else:
-                base_event_weight = file_data['evtFillWgt'][i] * luminosity if file_data['evtFillWgt'] is not None else 0.0
-            
-            # Extract the specific variable value
-            var_value = None
-            
-            if variable_name.startswith('HadronicSV_') or variable_name.startswith('LeptonicSV_'):
-                branch_name = variable_name
-                if file_data[branch_name] is not None:
-                    var_data = file_data[branch_name][i]
-                    if hasattr(var_data, '__len__'):
-                        if len(var_data) > 0:
-                            var_value = var_data[0]  # Take first SV
-                    else:
-                        var_value = var_data
-            
-            elif variable_name == 'rjr_Ms_0':
-                if file_data['rjr_Ms'] is not None:
-                    rjr_ms = file_data['rjr_Ms'][i]
-                    # rjr_Ms is already processed to extract [0] element during data loading
-                    if hasattr(rjr_ms, '__len__') and len(rjr_ms) > 0:
-                        var_value = rjr_ms[0]  # For jagged arrays (shouldn't happen with current loading)
-                    else:
-                        var_value = rjr_ms  # For scalar values (expected case)
-            
-            elif variable_name == 'rjr_Rs_0':
-                if file_data['rjr_Rs'] is not None:
-                    rjr_rs = file_data['rjr_Rs'][i]
-                    # rjr_Rs is already processed to extract [0] element during data loading
-                    if hasattr(rjr_rs, '__len__') and len(rjr_rs) > 0:
-                        var_value = rjr_rs[0]  # For jagged arrays (shouldn't happen with current loading)
-                    else:
-                        var_value = rjr_rs  # For scalar values (expected case)
-            
-            elif variable_name == 'selCMet':
-                if file_data['selCMet'] is not None:
-                    sel_met = file_data['selCMet'][i]
-                    # Handle both array and scalar cases
-                    if hasattr(sel_met, '__len__'):
-                        if len(sel_met) > 0:
-                            var_value = sel_met[0]
-                    else:
-                        var_value = sel_met
-            
-            # Add to lists if valid
-            if var_value is not None and np.isfinite(var_value):
-                values.append(var_value)
-                weights.append(base_event_weight)
+                weights = np.zeros(len(passing_indices))
         
+        # Extract variable values for passing events
+        if variable_name.startswith('HadronicSV_') or variable_name.startswith('LeptonicSV_'):
+            branch_name = variable_name
+            if file_data[branch_name] is not None:
+                var_data = file_data[branch_name][passing_indices]
+                # Handle jagged arrays
+                if hasattr(var_data[0], '__len__'):
+                    values = np.array([event[0] if len(event) > 0 else np.nan for event in var_data])
+                else:
+                    values = var_data
+            else:
+                values = np.full(len(passing_indices), np.nan)
         
-        return np.array(values), np.array(weights)
+        elif variable_name == 'rjr_Ms_0':
+            if file_data['rjr_Ms'] is not None:
+                values = file_data['rjr_Ms'][passing_indices]  # Already processed during loading
+            else:
+                values = np.full(len(passing_indices), np.nan)
+        
+        elif variable_name == 'rjr_Rs_0':
+            if file_data['rjr_Rs'] is not None:
+                values = file_data['rjr_Rs'][passing_indices]  # Already processed during loading
+            else:
+                values = np.full(len(passing_indices), np.nan)
+        
+        elif variable_name == 'selCMet':
+            if file_data['selCMet'] is not None:
+                var_data = file_data['selCMet'][passing_indices]
+                # Handle jagged arrays
+                if len(var_data.shape) > 1 or hasattr(var_data[0], '__len__'):
+                    values = np.array([event[0] if len(event) > 0 else np.nan for event in var_data])
+                else:
+                    values = var_data
+            else:
+                values = np.full(len(passing_indices), np.nan)
+        else:
+            values = np.full(len(passing_indices), np.nan)
+        
+        # Filter out invalid values
+        valid_mask = np.isfinite(values)
+        return values[valid_mask], weights[valid_mask]
 
 class DataMCComparisonPlotter:
     """Creates Data/MC comparison plots with proper styling."""
@@ -747,13 +807,13 @@ class DataMCComparisonPlotter:
         latex.DrawLatex(0.15, 0.92, "CMS")
         latex.SetTextFont(52)
         latex.SetTextSize(0.05)
-        latex.DrawLatex(0.233, 0.92, "Preliminary")
+        latex.DrawLatex(0.245, 0.92, "Preliminary")
         
         # Luminosity
         latex.SetTextFont(42)
         latex.SetTextAlign(31)
         latex.SetTextSize(0.05)  # Match axis text size
-        latex.DrawLatex(0.89, 0.92, f"{self.plotter.luminosity:.0f} fb^{{-1}} (13 TeV)")  # Align with CMS preliminary
+        latex.DrawLatex(0.9, 0.92, f"{self.plotter.luminosity:.0f} fb^{{-1}} (13 TeV)")  # Align with CMS preliminary
         
         # Region label
         if region_label:
@@ -844,10 +904,11 @@ def create_data_mc_comparison_plots(data_files_data: List[Dict], mc_files_data: 
         region_label = f"{multiplicity_config['label']}, {region_label}"
     
     # Process each variable
-    for var_name in variables_to_plot:
+    for var_idx, var_name in enumerate(variables_to_plot):
         if var_name not in sv_variables:
             print(f"Warning: Unknown variable {var_name} for SV type {sv_type}, skipping...")
             continue
+        
         
         bins, x_label, log_scale = sv_variables[var_name]
         
@@ -907,7 +968,7 @@ def create_data_mc_comparison_plots(data_files_data: List[Dict], mc_files_data: 
             # Create unique data histogram name
             unique_data_name = f"data_{var_name}_{region_config.get('name', 'unknown')}_{multiplicity_config.get('name', 'unknown')}"
             data_hist = comparison_plotter.create_histogram(data_values, data_weights, 
-                                                          unique_data_name, "Data", plotter.data_color, bins)
+                                                          unique_data_name, "data", plotter.data_color, bins)
         
         # Create total MC histogram for ratio
         total_mc_hist = None
@@ -921,23 +982,30 @@ def create_data_mc_comparison_plots(data_files_data: List[Dict], mc_files_data: 
         
         # Apply normalization if requested
         if normalize and mc_histograms:
-            # Get total MC integral (after scaling)
-            total_mc_integral = total_mc_hist.Integral() if total_mc_hist else 0
-            
-            # Get data integral
-            data_integral = data_hist.Integral() if data_hist else 0
-            
-            if total_mc_integral > 0:
-                # Normalize MC histograms to unit area
-                mc_norm_factor = 1.0 / total_mc_integral
-                for mc_hist, _ in mc_histograms:
-                    mc_hist.Scale(mc_norm_factor)
-                total_mc_hist.Scale(mc_norm_factor)
+            try:
+                # Get total MC integral (after scaling) with safety checks
+                total_mc_integral = total_mc_hist.Integral() if total_mc_hist else 0
                 
-                # Normalize data histogram to unit area
-                if data_hist and data_integral > 0:
-                    data_norm_factor = 1.0 / data_integral
-                    data_hist.Scale(data_norm_factor)
+                # Get data integral with safety checks
+                data_integral = data_hist.Integral() if data_hist else 0
+                
+                # Safety checks for valid normalization
+                if total_mc_integral > 0 and np.isfinite(total_mc_integral):
+                    # Normalize MC histograms to unit area
+                    mc_norm_factor = 1.0 / total_mc_integral
+                    if np.isfinite(mc_norm_factor):
+                        for mc_hist, _ in mc_histograms:
+                            mc_hist.Scale(mc_norm_factor)
+                        total_mc_hist.Scale(mc_norm_factor)
+                    
+                    # Normalize data histogram to unit area
+                    if data_hist and data_integral > 0 and np.isfinite(data_integral):
+                        data_norm_factor = 1.0 / data_integral
+                        if np.isfinite(data_norm_factor):
+                            data_hist.Scale(data_norm_factor)
+            except Exception as e:
+                print(f"Warning: Normalization failed for {var_name}: {e}")
+                # Continue without normalization
         
         # Create comparison canvas
         if mc_histograms:
@@ -953,6 +1021,11 @@ def create_data_mc_comparison_plots(data_files_data: List[Dict], mc_files_data: 
                     canvases[var_name] = canvas
             except Exception as e:
                 print(f"Warning: Failed to create canvas for {var_name}: {e}")
+        
+        # Force garbage collection after each variable when normalizing (prevent memory buildup)
+        if normalize:
+            import gc
+            gc.collect()
     
     return canvases
 

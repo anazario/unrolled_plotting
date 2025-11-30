@@ -399,7 +399,8 @@ class UnrolledCanvasMaker:
     def add_cms_labels(self, canvas: ROOT.TCanvas,
                        x_location: float = 0.12,
                        y_location: float = 0.915,
-                       text_size: float = 0.04) -> List[ROOT.TLatex]:
+                       text_size: float = 0.04,
+                       lumi_location: float = 0.85) -> List[ROOT.TLatex]:
         """
         Add CMS preliminary mark and luminosity label.
         
@@ -422,7 +423,7 @@ class UnrolledCanvasMaker:
         lumi_latex.SetNDC()
         lumi_latex.SetTextSize(text_size)
         lumi_latex.SetTextAlign(31)  # Right align
-        lumi_latex.DrawLatex(0.85, y_location, f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)")
+        lumi_latex.DrawLatex(lumi_location, y_location, f"{self.luminosity:.0f} fb^{{-1}} (13 TeV)")
         
         return cms_objects + [lumi_latex]
     
@@ -1241,6 +1242,154 @@ class UnrolledCanvasMaker:
         canvas.Update()
         return canvas
     
+    def create_postfit_single_canvas(self, data_hist: ROOT.TH1D, postfit_hist: ROOT.TH1D, 
+                                    group_labels: List[str], name: str, normalize: bool = False) -> ROOT.TCanvas:
+        """
+        Create a single-pad canvas with postfit line (kOrange+7) and data points, formatted like marker plots.
+        
+        Args:
+            data_hist: Data histogram
+            postfit_hist: Post-fit histogram
+            group_labels: Group labels for the plot
+            name: Canvas name
+            normalize: Whether to normalize histograms
+            
+        Returns:
+            Single-pad canvas with postfit line and data points
+        """
+        # Extract values and create fresh histograms
+        postfit_values = []
+        postfit_errors = []
+        for i in range(1, postfit_hist.GetNbinsX() + 1):
+            postfit_values.append(postfit_hist.GetBinContent(i))
+            postfit_errors.append(postfit_hist.GetBinError(i))
+        
+        data_values = []
+        data_errors = []
+        for i in range(1, data_hist.GetNbinsX() + 1):
+            data_values.append(data_hist.GetBinContent(i))
+            data_errors.append(data_hist.GetBinError(i))
+        
+        # Create fresh histograms
+        fresh_postfit = ROOT.TH1D(f"postfit_single_{name}", "", 9, 0, 9)
+        fresh_data = ROOT.TH1D(f"data_single_{name}", "", 9, 0, 9)
+
+        fresh_postfit.SetDirectory(0)
+        fresh_data.SetDirectory(0)
+        fresh_postfit.SetStats(0)
+        fresh_data.SetStats(0)
+        
+        # Store immediately to prevent garbage collection
+        ROOT.SetOwnership(fresh_postfit, False)
+        ROOT.SetOwnership(fresh_data, False)
+        
+        # Set bin labels based on grouping type
+        if "ms" in name.lower():
+            # MS grouping: RS labels for each bin
+            bin_labels = ["[0.15,0.3]", "[0.3,0.4]", "[0.4,inf]"] * 3  
+        else:
+            # RS grouping: MS labels for each bin  
+            bin_labels = ["[1.0,2.0]", "[2.0,3.0]", "[3.0,inf]"] * 3
+            
+        for i, label in enumerate(bin_labels):
+            fresh_postfit.GetXaxis().SetBinLabel(i + 1, label)
+            fresh_data.GetXaxis().SetBinLabel(i + 1, label)
+        
+        for i, (pval, perr, dval, derr) in enumerate(zip(postfit_values, postfit_errors, data_values, data_errors)):
+            fresh_postfit.SetBinContent(i + 1, pval)
+            fresh_postfit.SetBinError(i + 1, perr)
+            fresh_data.SetBinContent(i + 1, dval)
+            fresh_data.SetBinError(i + 1, derr)
+        
+        # Create single-pad canvas with marker plot dimensions
+        canvas = self.create_base_canvas(f"{name}_postfit_single", "", use_log_y=True, use_grid=True)
+        
+        # Increase right margin by additional 5% for legend space
+        current_right_margin = canvas.GetRightMargin()
+        canvas.SetRightMargin(current_right_margin + 0.05)
+        
+        # Set axis ranges
+        max_val = max(fresh_data.GetMaximum(), fresh_postfit.GetMaximum())
+        fresh_postfit.SetMinimum(0.5)
+        fresh_postfit.SetMaximum(max_val * 5.0)
+        
+        # Set appropriate y-axis title
+        if normalize:
+            fresh_postfit.GetYaxis().SetTitle("normalized events")
+        else:
+            fresh_postfit.GetYaxis().SetTitle("number of events")
+        
+        fresh_postfit.GetYaxis().CenterTitle()
+        fresh_postfit.GetYaxis().SetTitleSize(0.045)
+        fresh_postfit.GetYaxis().SetLabelSize(0.04)
+        
+        # Set x-axis title and formatting (match marker plot formatting)
+        fresh_postfit.GetXaxis().SetTitle("R_{S}" if "ms" in name.lower() else "M_{S} [TeV]")
+        fresh_postfit.GetXaxis().CenterTitle()
+        fresh_postfit.GetXaxis().SetTitleSize(0.045)
+        fresh_postfit.GetXaxis().SetLabelSize(0.055)  # Increased to match marker plots
+        fresh_postfit.GetXaxis().SetTitleOffset(1.2)
+        
+        # Style postfit as solid kOrange+7 line (no fill)
+        fresh_postfit.SetLineColor(ROOT.kOrange+7)
+        fresh_postfit.SetLineWidth(3)
+        fresh_postfit.SetLineStyle(1)
+        fresh_postfit.SetFillStyle(0)  # No fill
+        
+        # Draw postfit histogram first to establish axes
+        canvas.cd()
+        fresh_postfit.Draw("hist")
+        
+        # Create error band with kOrange+7 and 70% transparency
+        if not hasattr(ROOT, '_transparent_orange_postfit_index'):
+            ROOT._transparent_orange_postfit_index = ROOT.TColor.GetColorTransparent(ROOT.kOrange+7, 0.7)
+        
+        postfit_error_band = fresh_postfit.Clone(f"postfit_error_band_{name}")
+        postfit_error_band.SetDirectory(0)
+        postfit_error_band.SetFillColor(ROOT._transparent_orange_postfit_index)
+        postfit_error_band.SetFillStyle(1001)  # Solid fill
+        postfit_error_band.SetLineWidth(0)  # No border on error band
+        postfit_error_band.Draw("E2 SAME")  # E2 = error band
+        
+        # Redraw postfit line on top of error band
+        fresh_postfit.Draw("hist SAME")
+        
+        # Style and draw data points
+        fresh_data.SetMarkerStyle(20)  # Round black markers
+        fresh_data.SetMarkerSize(1.0)
+        fresh_data.SetLineColor(ROOT.kBlack)
+        fresh_data.SetMarkerColor(ROOT.kBlack)
+        fresh_data.SetLineStyle(1)
+        fresh_data.Draw("PEX0 SAME")
+        
+        # Create legend (match marker plot position)
+        legend = ROOT.TLegend(0.81, 0.72, 1.05, 0.91)
+        legend.SetBorderSize(0)
+        legend.SetFillStyle(0)
+        legend.SetTextSize(0.035)
+        legend.SetMargin(0.15)
+        
+        legend.AddEntry(fresh_data, "data", "pe")
+        legend.AddEntry(postfit_error_band, "post-fit uncertainty", "f")
+        legend.AddEntry(fresh_postfit, "post-fit", "l")
+        legend.Draw()
+        
+        # Add decorations (same as marker plots)
+        separator_lines = self.add_separator_lines(canvas, fresh_postfit)
+        text_objects = self.add_group_labels(canvas, group_labels)
+        cms_objects = self.add_cms_labels(canvas, lumi_location=0.8)
+        
+        # Store objects to prevent garbage collection
+        canvas.fresh_postfit = fresh_postfit
+        canvas.fresh_data = fresh_data
+        canvas.postfit_error_band = postfit_error_band
+        canvas.legend = legend
+        canvas.separator_lines = separator_lines
+        canvas.text_objects = text_objects
+        canvas.cms_objects = cms_objects
+        
+        return canvas
+
     def create_postfit_ratio_canvas(self, data_hist: ROOT.TH1D, postfit_hist: ROOT.TH1D, 
                                    group_labels: List[str], name: str, normalize: bool = False) -> ROOT.TCanvas:
         """Simple postfit vs data comparison."""

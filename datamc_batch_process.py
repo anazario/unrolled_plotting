@@ -66,7 +66,7 @@ class MultiRegionSVAnalyzer:
                     {'name': 'dxySig_lt90', 'dxySig_cut': '<:90', 'label': 'S_{xy} < 90', 'is_signal_region': False},
                     {'name': 'dxySig_90to300', 'dxySig_cut': '>=:90,<:300', 'label': '90 < S_{xy} < 300', 'is_signal_region': False},
                     {'name': 'dxySig_300to1000', 'dxySig_cut': '>=:300,<:1000', 'label': '300 < S_{xy} < 1000', 'is_signal_region': False},
-                    {'name': 'dxySig_lt1000', 'dxySig_cut': '<:1000', 'label': 'S_{xy} < 1000 (integrated sideband)', 'is_signal_region': False},
+                    {'name': 'dxySig_lt1000', 'dxySig_cut': '<:1000', 'label': 'd_{xy}/#sigma_{d_{xy}} < 1000 (integrated sideband)', 'is_signal_region': False},
                     {'name': 'dxySig_gt1000', 'dxySig_cut': '>:1000', 'label': 'S_{xy} > 1000', 'is_signal_region': True}
                 ],
                 'multiplicities': [
@@ -79,7 +79,7 @@ class MultiRegionSVAnalyzer:
                     {'name': 'dxySig_lt40', 'dxySig_cut': '<:40', 'label': 'S_{xy} < 40', 'is_signal_region': False},
                     {'name': 'dxySig_40to70', 'dxySig_cut': '>=:40,<:70', 'label': '40 < S_{xy} < 70', 'is_signal_region': False},
                     {'name': 'dxySig_70to1000', 'dxySig_cut': '>=:70,<:1000', 'label': '70 < S_{xy} < 1000', 'is_signal_region': False},
-                    {'name': 'dxySig_lt1000', 'dxySig_cut': '<:1000', 'label': 'S_{xy} < 1000 (integrated sideband)', 'is_signal_region': False},
+                    {'name': 'dxySig_lt1000', 'dxySig_cut': '<:1000', 'label': 'd_{xy}/#sigma_{d_{xy}} < 1000 (integrated sideband)', 'is_signal_region': False},
                     {'name': 'dxySig_gt1000', 'dxySig_cut': '>:1000', 'label': 'S_{xy} > 1000', 'is_signal_region': True}
                 ],
                 'multiplicities': [
